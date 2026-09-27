@@ -1,10 +1,12 @@
 
 import os
 import json
+import base64
 import requests
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
+API_KEY = os.getenv("ZERION_API_KEY")
 WALLET = os.getenv("WALLET_ADDRESS")
 
 STATE_FILE = "last_state.json"
@@ -26,29 +28,57 @@ def save_state(data):
         json.dump(data, f)
 
 def get_positions():
-    # Здесь подключим Fables API после того,
-    # как ты пришлёшь адрес кошелька.
-    return [
-        {"name": "LP #1", "value": 100},
-        {"name": "LP #2", "value": 200},
-    ]
+    auth = base64.b64encode(f"{API_KEY}:".encode()).decode()
+
+    headers = {
+        "Authorization": f"Basic {auth}"
+    }
+
+    url = f"https://api.zerion.io/v1/wallets/{WALLET}/positions/"
+
+    r = requests.get(url, headers=headers, params={"currency":"usd"})
+
+    r.raise_for_status()
+
+    result = []
+
+    for item in r.json().get("data", []):
+        attr = item["attributes"]
+
+        if attr.get("position_type") in ["deposit","locked","staked"]:
+
+            result.append({
+                "name": attr.get("name"),
+                "value": round(attr.get("value",0),2)
+            })
+
+    return result
 
 state = load_state()
 positions = get_positions()
 
-changes = []
+changes=[]
+
+new_state={}
 
 for p in positions:
-    old = state.get(p["name"])
-    if old is None:
-        changes.append(f"🆕 {p['name']}: ${p['value']}")
-    elif old != p["value"]:
-        diff = p["value"] - old
-        emoji = "🟢" if diff > 0 else "🔴"
-        changes.append(f"{emoji} {p['name']}: {old} → {p['value']} ({diff:+.2f})")
 
-state = {p["name"]: p["value"] for p in positions}
-save_state(state)
+    new_state[p["name"]] = p["value"]
+
+    if p["name"] not in state:
+        changes.append(f"🆕 {p['name']}: ${p['value']}")
+    else:
+        diff=p["value"]-state[p["name"]]
+
+        if abs(diff)>=0.01:
+            emoji="🟢" if diff>0 else "🔴"
+            changes.append(
+                f"{emoji} {p['name']}\n"
+                f"{state[p['name']]} → {p['value']} USD\n"
+                f"Изменение: {diff:+.2f}$"
+            )
+
+save_state(new_state)
 
 if changes:
-    send("\n".join(changes))
+    send("\n\n".join(changes))
