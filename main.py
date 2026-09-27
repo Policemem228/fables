@@ -1,7 +1,6 @@
 
 import os
 import json
-import base64
 import requests
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
