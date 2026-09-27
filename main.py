@@ -1,20 +1,17 @@
 
+import asyncio
 import json
 import os
-import time
 from pathlib import Path
 
 import requests
+from playwright.async_api import async_playwright
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
 STATE = Path("state.json")
-
-BASE = "https://www.fables.fi/api/indexer"
-
-PONS_POOL = "0x486435a1f76cd58193f854c6e6213cd05fd58d637865d02065ff558b387fa6ea"
-ETH_POOL = "0xbac3aa3b91584a53a579b3c999a56756e954e59247e497bad1d25a4334bde551"
+COOKIE_FILE = "cookies.json"
 
 
 def tg(text):
@@ -25,91 +22,77 @@ def tg(text):
     )
 
 
-def load():
+def load_state():
     if STATE.exists():
         return json.loads(STATE.read_text())
     return {}
 
 
-def save(data):
+def save_state(data):
     STATE.write_text(json.dumps(data))
 
 
-def get_fees():
-    now = int(time.time())
-    since = now - (now % 3600) - 3600
+async def read_portfolio():
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
 
-    r = requests.get(
-        BASE,
-        params={
-            "op": "feehours",
-            "ids": f"{PONS_POOL},{ETH_POOL}",
-            "since": since,
-            "off": 0,
-        },
-        timeout=30,
-    )
+        context = await browser.new_context()
 
-    r.raise_for_status()
-    return r.json()["data"]["PoolHour"]
+        if Path(COOKIE_FILE).exists():
+            await context.add_cookies(json.loads(Path(COOKIE_FILE).read_text()))
 
+        page = await context.new_page()
 
-def decode_price_from_sqrt(sqrt_price_x96):
-    sqrt = int(sqrt_price_x96)
-    price = (sqrt / 2**96) ** 2
-    return price
+        await page.goto("https://www.fables.fi/portfolio", wait_until="networkidle")
 
+        await page.wait_for_timeout(3000)
 
-def build():
-    state = load()
-    fees = get_fees()
+        portfolio = await page.locator("text=Portfolio value").locator("..").inner_text()
 
-    msg = "📊 Fables LP Report\n"
-    msg += time.strftime("%d.%m.%Y %H:%M UTC", time.gmtime())
-    msg += "\n\n"
+        body = await page.inner_text("body")
 
-    latest = {}
+        await browser.close()
 
-    for item in fees:
-        latest[item["pool_id"]] = item
-
-    pools = [
-        ("PONS/USDG", PONS_POOL),
-        ("ETH/USDG", ETH_POOL),
-    ]
-
-    for name, pool in pools:
-        if pool not in latest:
-            continue
-
-        p = latest[pool]
-
-        current_price = decode_price_from_sqrt(p["highSqrtPriceX96"])
-        low_price = decode_price_from_sqrt(p["lowSqrtPriceX96"])
-
-        old = state.get(name, current_price)
-
-        diff = current_price - old
-        pct = diff / old * 100 if old else 0
-
-        emoji = "🟢" if diff >= 0 else "🔴"
-
-        msg += (
-            f"{emoji} {name}\n"
-            f"Цена сейчас: {current_price:.8f}\n"
-            f"Диапазон часа:\n"
-            f"{low_price:.8f} → {current_price:.8f}\n"
-            f"Изменение: {pct:+.2f}%\n"
-            f"Комиссии:\n"
-            f"• token0: {p['fees0']}\n"
-            f"• token1: {p['fees1']}\n\n"
-        )
-
-        state[name] = current_price
-
-    save(state)
-
-    return msg
+        return portfolio, body
 
 
-tg(build())
+def extract(body):
+    lines = body.splitlines()
+
+    result = {}
+
+    for i, line in enumerate(lines):
+        if "PONS/USDG" in line:
+            result["PONS"] = lines[max(0, i-5):i+8]
+
+        if "ETH/USDG" in line:
+            result["ETH"] = lines[max(0, i-5):i+8]
+
+    return result
+
+
+async def main():
+    state = load_state()
+
+    portfolio, body = await read_portfolio()
+
+    data = extract(body)
+
+    msg = "📊 Fables LP Report\n\n"
+
+    msg += portfolio + "\n\n"
+
+    for key in ("PONS", "ETH"):
+        if key in data:
+            msg += f"{key}/USDG\n"
+            msg += "\n".join(data[key]) + "\n\n"
+
+    if portfolio != state.get("portfolio"):
+        tg(msg)
+
+    state["portfolio"] = portfolio
+
+    save_state(state)
+
+
+asyncio.run(main())
