@@ -59,17 +59,16 @@ def report(name, pool, state):
 
     hour = get_pool_hour(pool)
 
-    if "lowSqrtPriceX96" in hour:
-        low = sqrt_to_price(hour["lowSqrtPriceX96"])
-        high = sqrt_to_price(hour["highSqrtPriceX96"])
-    else:
-        close = sqrt_to_price(hour["closeSqrtPriceX96"])
-        low = close
-        high = close
-
     if "closeSqrtPriceX96" not in hour:
         raise ValueError("API не вернул цену закрытия текущего часа (closeSqrtPriceX96)")
     current = sqrt_to_price(hour["closeSqrtPriceX96"])
+
+    if "lowSqrtPriceX96" in hour and "highSqrtPriceX96" in hour:
+        low = sqrt_to_price(hour["lowSqrtPriceX96"])
+        high = sqrt_to_price(hour["highSqrtPriceX96"])
+    else:
+        low = current
+        high = current
 
     prev = state.get(name, current)
     change = (current - prev) / prev * 100 if prev else 0
