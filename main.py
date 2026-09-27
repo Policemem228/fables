@@ -39,7 +39,7 @@ def save_state(state):
 
 
 def rpc_call(data):
-    payload = [{
+    payload = {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "eth_call",
@@ -47,11 +47,25 @@ def rpc_call(data):
             "to": "0xE44c0BAb43BdD47e7Ab40236bC183dCc77A9ED6c",
             "data": data
         }, "latest"]
-    }]
+    }
 
     r = requests.post(RPC, json=payload, timeout=30)
     r.raise_for_status()
-    return r.json()[0]["result"]
+
+    response = r.json()
+    if isinstance(response, list):
+        if not response:
+            raise ValueError("RPC вернул пустой batch-ответ")
+        response = response[0]
+
+    if "error" in response:
+        error = response["error"]
+        raise RuntimeError(f"RPC eth_call error {error.get('code')}: {error.get('message')}")
+
+    result = response.get("result")
+    if not isinstance(result, str) or not result.startswith("0x"):
+        raise ValueError(f"Некорректный результат RPC eth_call: {result!r}")
+    return result
 
 
 def sqrt_to_price(value):
