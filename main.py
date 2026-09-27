@@ -14,7 +14,6 @@ POOL_STABLE = "0x29bb26f93fe1bbbf81ee62671cc2a66fbf318f20e6b0757607a2fe3713651fd
 
 BASE = "https://www.fables.fi/api/indexer"
 
-
 def tg(text):
     requests.post(
         f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
