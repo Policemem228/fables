@@ -1,6 +1,5 @@
 import os
 import json
-import math
 import requests
 from datetime import datetime
 
@@ -22,10 +21,7 @@ POOLS = {
 def send(text):
     requests.post(
         f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-        json={
-            "chat_id": CHAT_ID,
-            "text": text
-        },
+        json={"chat_id": CHAT_ID, "text": text},
         timeout=20
     )
 
@@ -46,89 +42,71 @@ def get_json(url):
     r = requests.get(url, timeout=20)
 
     if r.status_code != 200:
-        print("URL:", url)
-        print("STATUS:", r.status_code)
-        print("BODY:", r.text)
+        print(f"Ошибка {r.status_code}: {url}")
+        print(r.text)
         return None
 
     return r.json()
 
 
-def get_hour(pool):
-    return get_json(
-        f"https://www.fables.fi/api/indexer?op=feehours&ids={pool}"
-    )
-
-
-def get_day(pool):
-    return get_json(
-        f"https://www.fables.fi/api/indexer?op=feedays&ids={pool}"
-    )
-
-
-def sqrt_to_price(sqrt_x96):
-    """
-    Примерная цена из sqrtPriceX96
-    """
-    return (int(sqrt_x96) / 2**96) ** 2
+def sqrt_to_price(v):
+    return (int(v) / 2**96) ** 2
 
 
 state = load_state()
 
-lines = []
-
-lines.append("📊 Fables LP Report")
-lines.append(datetime.utcnow().strftime("%d.%m.%Y %H:%M UTC"))
-lines.append("")
+msg = []
+msg.append("📊 Fables LP Report")
+msg.append(datetime.utcnow().strftime("%d.%m.%Y %H:%M UTC"))
+msg.append("")
 
 for name, info in POOLS.items():
 
     pool = info["id"]
 
-    hour = get_hour(pool)
-    day = get_day(pool)
+    hour = get_json(
+        f"https://www.fables.fi/api/indexer?op=hours&ids={pool}"
+    )
 
     if hour is None:
-        lines.append(f"❌ {name}")
-        lines.append("Не удалось получить данные.")
-        lines.append("")
+        msg.append(f"❌ {name}")
+        msg.append("Не удалось получить данные.\n")
         continue
 
-    latest = hour["data"]["PoolHour"][-1]
+    data = hour["data"]["PoolHour"]
 
-    high = latest["highSqrtPriceX96"]
-    low = latest["lowSqrtPriceX96"]
+    latest = data[-1]
+    prev = data[-2] if len(data) > 1 else latest
 
-    current_price = sqrt_to_price(high)
-    low_price = sqrt_to_price(low)
+    high = sqrt_to_price(latest["highSqrtPriceX96"])
+    low = sqrt_to_price(latest["lowSqrtPriceX96"])
 
-    old_price = state.get(pool, current_price)
+    prev_price = sqrt_to_price(prev["highSqrtPriceX96"])
 
     change = 0
-
-    if old_price != 0:
-        change = (current_price - old_price) / old_price * 100
-
-    state[pool] = current_price
-
-    arrow = "📈" if change >= 0 else "📉"
+    if prev_price:
+        change = (high - prev_price) / prev_price * 100
 
     fees0 = int(latest["fees0"])
     fees1 = int(latest["fees1"])
 
-    lines.append("🟢 In Range")
-    lines.append("")
-    lines.append(name)
-    lines.append(f"Цена сейчас: {current_price:.8f}")
-    lines.append(f"Диапазон часа:")
-    lines.append(f"{low_price:.8f} → {current_price:.8f}")
-    lines.append(f"Изменение: {arrow} {change:+.2f}%")
-    lines.append("")
-    lines.append("Комиссии часа:")
-    lines.append(f"• token0: {fees0:,}".replace(",", " "))
-    lines.append(f"• token1: {fees1:,}".replace(",", " "))
-    lines.append("")
+    arrow = "📈" if change >= 0 else "📉"
+
+    msg.append("🟢 In Range")
+    msg.append("")
+    msg.append(name)
+    msg.append(f"Цена сейчас: {high:.8f}")
+    msg.append(f"Диапазон часа:")
+    msg.append(f"{low:.8f} → {high:.8f}")
+    msg.append(f"Изменение: {arrow} {change:+.2f}%")
+    msg.append("")
+    msg.append("Комиссии часа:")
+    msg.append(f"• token0: {fees0:,}".replace(',', ' '))
+    msg.append(f"• token1: {fees1:,}".replace(',', ' '))
+    msg.append("")
+
+    state[pool] = high
 
 save_state(state)
 
-send("\n".join(lines))
+send("\n".join(msg))
