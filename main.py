@@ -27,16 +27,19 @@ def save_state(data):
     with open(STATE_FILE, "w") as f:
         json.dump(data, f)
 
-def get_positions():
-    auth = base64.b64encode(f"{API_KEY}:".encode()).decode()
 
+def get_positions():
     headers = {
-        "Authorization": f"Basic {auth}"
+        "Authorization": f"Bearer {API_KEY}"
     }
 
     url = f"https://api.zerion.io/v1/wallets/{WALLET}/positions/"
 
-    r = requests.get(url, headers=headers, params={"currency":"usd"})
+    r = requests.get(
+        url,
+        headers=headers,
+        params={"currency": "usd"}
+    )
 
     r.raise_for_status()
 
@@ -45,15 +48,12 @@ def get_positions():
     for item in r.json().get("data", []):
         attr = item["attributes"]
 
-        if attr.get("position_type") in ["deposit","locked","staked"]:
-
-            result.append({
-                "name": attr.get("name"),
-                "value": round(attr.get("value",0),2)
-            })
+        result.append({
+            "name": attr.get("name", "Unknown"),
+            "value": round(attr.get("value", 0), 2)
+        })
 
     return result
-
 state = load_state()
 positions = get_positions()
 
