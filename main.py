@@ -35,7 +35,9 @@ def save_state(state):
 def sqrt_to_price(value):
     if isinstance(value, str):
         value = int(value, 16) if value.startswith("0x") else int(value)
-    return (value / (2**96))**2
+    raw_price = (value / (2**96))**2
+    # token0 uses 18 decimals and token1 uses 6 decimals in these pools.
+    return raw_price * (10 ** (18 - 6))
 
 
 def get_pool_hour(pool):
