@@ -1,6 +1,5 @@
 import os
 import json
-import math
 import requests
 from datetime import datetime, timezone
 
@@ -22,7 +21,8 @@ ETH_CALL = "0xf7b7da000000000000000000000000000000000000000000000000000000000000
 def send(text):
     requests.post(
         f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-        json={"chat_id": CHAT_ID, "text": text}
+        json={"chat_id": CHAT_ID, "text": text},
+        timeout=20
     )
 
 
@@ -48,64 +48,82 @@ def rpc_call(data):
             "data": data
         }, "latest"]
     }]
+
     r = requests.post(RPC, json=payload, timeout=30)
     r.raise_for_status()
     return r.json()[0]["result"]
 
 
-def sqrt_to_price(x):
-    return (int(x,16)/(2**96))**2
+def sqrt_to_price(value):
+    if isinstance(value, str):
+        value = int(value, 16) if value.startswith("0x") else int(value)
+    return (value / (2**96))**2
 
 
-def pool_hour(pool):
+def get_pool_hour(pool):
     now = int(datetime.now(timezone.utc).timestamp())
-    now = now - now % 3600
+    now -= now % 3600
+
     url = f"https://www.fables.fi/api/indexer?op=hours&ids={pool}&since={now}&off=0"
+
     r = requests.get(url, timeout=30)
     r.raise_for_status()
-    return r.json()["data"]["PoolHour"][-1]
+
+    data = r.json()["data"]["PoolHour"]
+
+    if not data:
+        raise Exception("Нет данных PoolHour")
+
+    return data[-1]
 
 
-def report(name,pool,call,state):
+def report(name, pool, call, state):
 
-    p = pool_hour(pool)
+    hour = get_pool_hour(pool)
 
-    low = sqrt_to_price(hex(int(p["lowSqrtPriceX96"])) )
-    high = sqrt_to_price(hex(int(p["highSqrtPriceX96"])) )
+    if "lowSqrtPriceX96" in hour:
+        low = sqrt_to_price(hour["lowSqrtPriceX96"])
+        high = sqrt_to_price(hour["highSqrtPriceX96"])
+    else:
+        close = sqrt_to_price(hour["closeSqrtPriceX96"])
+        low = close
+        high = close
 
     current = sqrt_to_price(rpc_call(call)[130:194])
 
-    prev = state.get(name,current)
-    change = (current-prev)/prev*100 if prev else 0
-    state[name]=current
+    prev = state.get(name, current)
+    change = (current - prev) / prev * 100 if prev else 0
+    state[name] = current
+
+    fee0 = int(hour.get("fees0", 0)) / 1e18
+    fee1 = int(hour.get("fees1", 0)) / 1e6
 
     return f"""🟢 {name}
 
-Цена: {current:.8f}
-Изменение: {change:+.2f}%
+💵 Цена: {current:.8f}
+📈 Изменение: {change:+.2f}%
 
-Диапазон:
-{low:.8f}
-⬇
-{high:.8f}
+🎯 Диапазон часа
+⬇ {low:.8f}
+⬆ {high:.8f}
 
-Комиссии часа:
-token0 {int(p["fees0"])/1e18:.6f}
-token1 {int(p["fees1"])/1e6:.6f}"""
+💰 Комиссии часа
+• token0: {fee0:.6f}
+• token1: {fee1:.6f}"""
 
 
-state=load_state()
+state = load_state()
 
-text=f"📊 Fables LP Report\n{datetime.utcnow().strftime('%d.%m.%Y %H:%M UTC')}\n\n"
+text = f"📊 Fables LP Report\n{datetime.utcnow().strftime('%d.%m.%Y %H:%M UTC')}\n\n"
 
-for n,p,c in [
-    ("PONS/USDG",PONS_POOL,PONS_CALL),
-    ("ETH/USDG",ETH_POOL,ETH_CALL)
+for name, pool, call in [
+    ("PONS/USDG", PONS_POOL, PONS_CALL),
+    ("ETH/USDG", ETH_POOL, ETH_CALL),
 ]:
     try:
-        text+=report(n,p,c,state)+"\n\n"
+        text += report(name, pool, call, state) + "\n\n"
     except Exception as e:
-        text+=f"❌ {n}\n{e}\n\n"
+        text += f"❌ {name}\n{e}\n\n"
 
 save_state(state)
 send(text)
