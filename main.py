@@ -65,32 +65,34 @@ def report(name, pool, state):
         raise ValueError("API не вернул цену закрытия текущего часа (closeSqrtPriceX96)")
     current = sqrt_to_price(hour["closeSqrtPriceX96"])
 
-    if "lowSqrtPriceX96" in hour and "highSqrtPriceX96" in hour:
+    has_range = "lowSqrtPriceX96" in hour and "highSqrtPriceX96" in hour
+    if has_range:
         low = sqrt_to_price(hour["lowSqrtPriceX96"])
         high = sqrt_to_price(hour["highSqrtPriceX96"])
-    else:
-        low = current
-        high = current
 
-    prev = state.get(name, current)
-    change = (current - prev) / prev * 100 if prev else 0
+    prev = state.get(name)
+    change_text = f"{(current - prev) / prev * 100:+.2f}%" if prev else "нет предыдущих данных"
     state[name] = current
 
-    fee0 = int(hour.get("fees0", 0)) / 1e18
-    fee1 = int(hour.get("fees1", 0)) / 1e6
+    fees0 = hour.get("fees0")
+    fees1 = hour.get("fees1")
+    fee0_text = f"{int(fees0) / 1e18:.6f}" if fees0 is not None else "нет данных"
+    fee1_text = f"{int(fees1) / 1e6:.6f}" if fees1 is not None else "нет данных"
+    low_text = f"{low:.8f}" if has_range else "нет данных"
+    high_text = f"{high:.8f}" if has_range else "нет данных"
 
     return f"""🟢 {name}
 
 💵 Цена: {current:.8f}
-📈 Изменение: {change:+.2f}%
+📈 Изменение: {change_text}
 
 🎯 Диапазон часа
-⬇ {low:.8f}
-⬆ {high:.8f}
+⬇ {low_text}
+⬆ {high_text}
 
 💰 Комиссии часа
-• token0: {fee0:.6f}
-• token1: {fee1:.6f}"""
+• token0: {fee0_text}
+• token1: {fee1_text}"""
 
 
 state = load_state()
