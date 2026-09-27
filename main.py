@@ -1,20 +1,27 @@
-import base64
+
 import os
 import json
+import time
 import requests
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
-API_KEY = os.getenv("ZERION_API_KEY")
-WALLET = os.getenv("WALLET_ADDRESS")
 
-STATE_FILE = "last_state.json"
+STATE_FILE = "state.json"
 
-def send(text):
+POOL_HOURS = "0x486435a1f76cd58193f854c6e6213cd05fd58d637865d02065ff558b387fa6ea"
+POOL_STABLE = "0x29bb26f93fe1bbbf81ee62671cc2a66fbf318f20e6b0757607a2fe3713651fdf"
+
+BASE = "https://www.fables.fi/api/indexer"
+
+
+def tg(text):
     requests.post(
         f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-        json={"chat_id": CHAT_ID, "text": text}
+        json={"chat_id": CHAT_ID, "text": text},
+        timeout=30,
     )
+
 
 def load_state():
     if os.path.exists(STATE_FILE):
@@ -22,73 +29,97 @@ def load_state():
             return json.load(f)
     return {}
 
-def save_state(data):
+
+def save_state(state):
     with open(STATE_FILE, "w") as f:
-        json.dump(data, f)
+        json.dump(state, f)
 
 
-
-def get_positions():
-    auth = base64.b64encode(f"{API_KEY}:".encode()).decode()
-
-    headers = {
-        "Authorization": f"Basic {auth}",
-        "Accept": "application/json"
-    }
-
-    url = f"https://api.zerion.io/v1/wallets/{WALLET}/positions/"
+def get_pool(pool_id, op):
+    since = int(time.time()) - 3600
 
     r = requests.get(
-        url,
-        headers=headers,
+        BASE,
         params={
-            "currency": "usd",
-            "filter[position_types]": "deposit,staked,locked"
-        }
+            "op": op,
+            "ids": pool_id,
+            "since": since,
+        },
+        timeout=30,
     )
-
-    # Если кошелек еще индексируется
-    if r.status_code == 202:
-        raise Exception("Wallet is indexing. Run workflow again in 30–60 seconds.")
 
     r.raise_for_status()
 
-    result = []
+    return r.json()
 
-    for item in r.json()["data"]:
-        attr = item["attributes"]
 
-        result.append({
-            "name": attr["name"],
-            "value": round(attr["value"], 2)
-        })
+def extract_value(data):
+    if isinstance(data, list) and data:
+        last = data[-1]
 
-    return result
+        if isinstance(last, dict):
+            for k in [
+                "tvl",
+                "value",
+                "totalValue",
+                "usd",
+                "amount",
+            ]:
+                if k in last:
+                    return float(last[k])
+
+    if isinstance(data, dict):
+        for k in [
+            "tvl",
+            "value",
+            "totalValue",
+            "usd",
+            "amount",
+        ]:
+            if k in data:
+                return float(data[k])
+
+    return None
+
+
+def check(name, op, pool, state):
+    value = extract_value(get_pool(pool, op))
+
+    if value is None:
+        return None
+
+    old = state.get(name)
+
+    state[name] = value
+
+    if old is None:
+        return f"🆕 {name}\nТекущее значение: {value:,.2f}"
+
+    diff = value - old
+    pct = diff / old * 100 if old else 0
+
+    emoji = "🟢" if diff >= 0 else "🔴"
+
+    return (
+        f"{emoji} {name}\n"
+        f"{old:,.2f} → {value:,.2f}\n"
+        f"{diff:+,.2f} ({pct:+.2f}%)"
+    )
+
+
 state = load_state()
-positions = get_positions()
 
-changes=[]
+msgs = []
 
-new_state={}
+m = check("LP HOURS", "hours", POOL_HOURS, state)
+if m:
+    msgs.append(m)
 
-for p in positions:
+m = check("LP STABLE", "stable", POOL_STABLE, state)
+if m:
+    msgs.append(m)
 
-    new_state[p["name"]] = p["value"]
+save_state(state)
 
-    if p["name"] not in state:
-        changes.append(f"🆕 {p['name']}: ${p['value']}")
-    else:
-        diff=p["value"]-state[p["name"]]
-
-        if abs(diff)>=0.01:
-            emoji="🟢" if diff>0 else "🔴"
-            changes.append(
-                f"{emoji} {p['name']}\n"
-                f"{state[p['name']]} → {p['value']} USD\n"
-                f"Изменение: {diff:+.2f}$"
-            )
-
-save_state(new_state)
-
-if changes:
-    send("\n\n".join(changes))
+if msgs:
+    tg("📊 Fables LP Update\n\n" + "\n\n".join(msgs))
