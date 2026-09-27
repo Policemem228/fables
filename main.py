@@ -28,7 +28,6 @@ def load_state():
             return json.load(f)
     return {}
 
-
 def save_state(state):
     with open(STATE_FILE, "w") as f:
         json.dump(state, f)
