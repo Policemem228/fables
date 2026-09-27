@@ -35,8 +35,11 @@ def save_state(state):
         json.dump(state, f)
 
 
+
 def get_pool(pool_id, op):
-    since = int(time.time()) - 3600
+    # Fables использует границу часа и обязательный off=0
+    now = int(time.time())
+    since = now - (now % 3600) - 3600
 
     r = requests.get(
         BASE,
@@ -44,9 +47,15 @@ def get_pool(pool_id, op):
             "op": op,
             "ids": pool_id,
             "since": since,
+            "off": 0,
         },
         timeout=30,
     )
+
+    # Если снова будет ошибка, выведем ответ сервера в лог GitHub
+    print("URL:", r.url)
+    print("STATUS:", r.status_code)
+    print("BODY:", r.text[:1000])
 
     r.raise_for_status()
 
