@@ -18,8 +18,22 @@ jobs:
 
       - run: pip install requests
 
+      - name: Restore price history
+        uses: actions/cache/restore@v4
+        with:
+          path: last_state.json
+          key: fables-price-state-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            fables-price-state-
+
       - name: Run bot
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
         run: python main.py
+
+      - name: Save price history
+        uses: actions/cache/save@v4
+        with:
+          path: last_state.json
+          key: fables-price-state-${{ github.run_id }}-${{ github.run_attempt }}
