@@ -1,17 +1,20 @@
 
-import os
 import json
+import os
 import time
+from pathlib import Path
+
 import requests
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-STATE_FILE = "state.json"
-
-POOL_ID = "0x486435a1f76cd58193f854c6e6213cd05fd58d637865d02065ff558b387fa6ea"
+STATE = Path("state.json")
 
 BASE = "https://www.fables.fi/api/indexer"
+
+PONS_POOL = "0x486435a1f76cd58193f854c6e6213cd05fd58d637865d02065ff558b387fa6ea"
+ETH_POOL = "0xbac3aa3b91584a53a579b3c999a56756e954e59247e497bad1d25a4334bde551"
 
 
 def tg(text):
@@ -22,27 +25,25 @@ def tg(text):
     )
 
 
-def load_state():
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, "r") as f:
-            return json.load(f)
+def load():
+    if STATE.exists():
+        return json.loads(STATE.read_text())
     return {}
 
 
-def save_state(state):
-    with open(STATE_FILE, "w") as f:
-        json.dump(state, f)
+def save(data):
+    STATE.write_text(json.dumps(data))
 
 
-def get_price():
+def get_fees():
     now = int(time.time())
     since = now - (now % 3600) - 3600
 
     r = requests.get(
         BASE,
         params={
-            "op": "hours",
-            "ids": POOL_ID,
+            "op": "feehours",
+            "ids": f"{PONS_POOL},{ETH_POOL}",
             "since": since,
             "off": 0,
         },
@@ -50,37 +51,65 @@ def get_price():
     )
 
     r.raise_for_status()
-
-    data = r.json()["data"]["PoolHour"]
-
-    latest = data[-1]
-
-    return float(latest["usd1Close"])
+    return r.json()["data"]["PoolHour"]
 
 
-state = load_state()
+def decode_price_from_sqrt(sqrt_price_x96):
+    sqrt = int(sqrt_price_x96)
+    price = (sqrt / 2**96) ** 2
+    return price
 
-price = get_price()
 
-old = state.get("price")
+def build():
+    state = load()
+    fees = get_fees()
 
-state["price"] = price
+    msg = "📊 Fables LP Report\n"
+    msg += time.strftime("%d.%m.%Y %H:%M UTC", time.gmtime())
+    msg += "\n\n"
 
-save_state(state)
+    latest = {}
 
-if old is None:
-    tg(
-        f"📊 Fables Monitor запущен\n\n"
-        f"Текущее значение LP: {price:.8f}"
-    )
-else:
-    diff = price - old
-    pct = diff / old * 100
+    for item in fees:
+        latest[item["pool_id"]] = item
 
-    emoji = "🟢" if diff >= 0 else "🔴"
+    pools = [
+        ("PONS/USDG", PONS_POOL),
+        ("ETH/USDG", ETH_POOL),
+    ]
 
-    tg(
-        f"{emoji} LP Update\n\n"
-        f"{old:.8f} → {price:.8f}\n"
-        f"{diff:+.8f} ({pct:+.2f}%)"
-    )
+    for name, pool in pools:
+        if pool not in latest:
+            continue
+
+        p = latest[pool]
+
+        current_price = decode_price_from_sqrt(p["highSqrtPriceX96"])
+        low_price = decode_price_from_sqrt(p["lowSqrtPriceX96"])
+
+        old = state.get(name, current_price)
+
+        diff = current_price - old
+        pct = diff / old * 100 if old else 0
+
+        emoji = "🟢" if diff >= 0 else "🔴"
+
+        msg += (
+            f"{emoji} {name}\n"
+            f"Цена сейчас: {current_price:.8f}\n"
+            f"Диапазон часа:\n"
+            f"{low_price:.8f} → {current_price:.8f}\n"
+            f"Изменение: {pct:+.2f}%\n"
+            f"Комиссии:\n"
+            f"• token0: {p['fees0']}\n"
+            f"• token1: {p['fees1']}\n\n"
+        )
+
+        state[name] = current_price
+
+    save(state)
+
+    return msg
+
+
+tg(build())
