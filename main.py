@@ -1,4 +1,4 @@
-
+import base64
 import os
 import json
 import requests
@@ -27,9 +27,13 @@ def save_state(data):
         json.dump(data, f)
 
 
+
 def get_positions():
+    auth = base64.b64encode(f"{API_KEY}:".encode()).decode()
+
     headers = {
-        "Authorization": f"Bearer {API_KEY}"
+        "Authorization": f"Basic {auth}",
+        "Accept": "application/json"
     }
 
     url = f"https://api.zerion.io/v1/wallets/{WALLET}/positions/"
@@ -37,19 +41,26 @@ def get_positions():
     r = requests.get(
         url,
         headers=headers,
-        params={"currency": "usd"}
+        params={
+            "currency": "usd",
+            "filter[position_types]": "deposit,staked,locked"
+        }
     )
+
+    # Если кошелек еще индексируется
+    if r.status_code == 202:
+        raise Exception("Wallet is indexing. Run workflow again in 30–60 seconds.")
 
     r.raise_for_status()
 
     result = []
 
-    for item in r.json().get("data", []):
+    for item in r.json()["data"]:
         attr = item["attributes"]
 
         result.append({
-            "name": attr.get("name", "Unknown"),
-            "value": round(attr.get("value", 0), 2)
+            "name": attr["name"],
+            "value": round(attr["value"], 2)
         })
 
     return result
