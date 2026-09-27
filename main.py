@@ -1,98 +1,115 @@
-
-import asyncio
-import json
 import os
-from pathlib import Path
-
+import json
 import requests
-from playwright.async_api import async_playwright
+from datetime import datetime
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-STATE = Path("state.json")
-COOKIE_FILE = "cookies.json"
+STATE_FILE = "last_state.json"
+
+POOLS = {
+    "PONS/USDG": {
+        "id": "0x486435a1f76cd58193f854c6e6213cd05fd58d637865d02065ff558b387fa6ea",
+    },
+    "ETH/USDG": {
+        "id": "0xbac3aa3b91584a53a579b3c999a56756e954e59247e497bad1d25a4334bde551",
+    }
+}
 
 
-def tg(text):
+def send(text):
     requests.post(
         f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-        json={"chat_id": CHAT_ID, "text": text},
-        timeout=30,
+        json={"chat_id": CHAT_ID, "text": text}
     )
 
 
 def load_state():
-    if STATE.exists():
-        return json.loads(STATE.read_text())
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, "r") as f:
+            return json.load(f)
     return {}
 
 
-def save_state(data):
-    STATE.write_text(json.dumps(data))
+def save_state(state):
+    with open(STATE_FILE, "w") as f:
+        json.dump(state, f)
 
 
-async def read_portfolio():
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-
-        context = await browser.new_context()
-
-        if Path(COOKIE_FILE).exists():
-            await context.add_cookies(json.loads(Path(COOKIE_FILE).read_text()))
-
-        page = await context.new_page()
-
-        await page.goto("https://www.fables.fi/portfolio", wait_until="networkidle")
-
-        await page.wait_for_timeout(3000)
-
-        portfolio = await page.locator("text=Portfolio value").locator("..").inner_text()
-
-        body = await page.inner_text("body")
-
-        await browser.close()
-
-        return portfolio, body
+def get_json(url):
+    r = requests.get(url, timeout=20)
+    r.raise_for_status()
+    return r.json()
 
 
-def extract(body):
-    lines = body.splitlines()
-
-    result = {}
-
-    for i, line in enumerate(lines):
-        if "PONS/USDG" in line:
-            result["PONS"] = lines[max(0, i-5):i+8]
-
-        if "ETH/USDG" in line:
-            result["ETH"] = lines[max(0, i-5):i+8]
-
-    return result
+def get_mark(pool):
+    return get_json(
+        f"https://www.fables.fi/api/indexer?op=marks&ids={pool}"
+    )
 
 
-async def main():
-    state = load_state()
-
-    portfolio, body = await read_portfolio()
-
-    data = extract(body)
-
-    msg = "📊 Fables LP Report\n\n"
-
-    msg += portfolio + "\n\n"
-
-    for key in ("PONS", "ETH"):
-        if key in data:
-            msg += f"{key}/USDG\n"
-            msg += "\n".join(data[key]) + "\n\n"
-
-    if portfolio != state.get("portfolio"):
-        tg(msg)
-
-    state["portfolio"] = portfolio
-
-    save_state(state)
+def get_hour(pool):
+    return get_json(
+        f"https://www.fables.fi/api/indexer?op=feehours&ids={pool}"
+    )
 
 
-asyncio.run(main())
+def get_day(pool):
+    return get_json(
+        f"https://www.fables.fi/api/indexer?op=feedays&ids={pool}"
+    )
+
+
+state = load_state()
+report = []
+
+now = datetime.utcnow().strftime("%d.%m.%Y %H:%M UTC")
+report.append(f"📊 Fables LP Report\n{now}\n")
+
+for name, info in POOLS.items():
+
+    pool = info["id"]
+
+    mark = get_mark(pool)
+    hour = get_hour(pool)
+    day = get_day(pool)
+
+    price = float(mark["data"]["Pool"][0]["usd0"])
+
+    prev = state.get(pool, price)
+    change = (price - prev) / prev * 100 if prev else 0
+
+    state[pool] = price
+
+    h = hour["data"]["PoolHour"][-1]
+
+    low = h["lowSqrtPriceX96"]
+    high = h["highSqrtPriceX96"]
+
+    fees0 = int(h["fees0"])
+    fees1 = int(h["fees1"])
+
+    status = "🟢 In Range"
+
+    arrow = "📈" if change >= 0 else "📉"
+
+    report.append(
+f"""{status}
+
+{name}
+Цена сейчас: {price:.8f}
+Изменение за час: {arrow} {change:+.2f}%
+
+Комиссии часа:
+• token0: {fees0}
+• token1: {fees1}
+
+Диапазон часа (sqrt):
+{low}
+→
+{high}
+""")
+
+save_state(state)
+send("\n".join(report))
