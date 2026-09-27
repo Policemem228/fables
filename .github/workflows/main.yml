@@ -1,9 +1,13 @@
+
 name: Fables LP Monitor
 
 on:
   schedule:
     - cron: "0 * * * *"
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   monitor:
@@ -28,3 +32,14 @@ jobs:
           WALLET_ADDRESS: ${{ secrets.WALLET_ADDRESS }}
           ZERION_API_KEY: ${{ secrets.ZERION_API_KEY }}
         run: python main.py
+
+      - name: Commit updated state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add state.json
+
+          git diff --cached --quiet || git commit -m "Update LP state"
+
+          git push
