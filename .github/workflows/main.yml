@@ -25,4 +25,6 @@ jobs:
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
+          WALLET_ADDRESS: ${{ secrets.WALLET_ADDRESS }}
+          ZERION_API_KEY: ${{ secrets.ZERION_API_KEY }}
         run: python main.py
