@@ -1,5 +1,6 @@
 import os
 import json
+import math
 import requests
 from datetime import datetime
 
@@ -10,10 +11,10 @@ STATE_FILE = "last_state.json"
 
 POOLS = {
     "PONS/USDG": {
-        "id": "0x486435a1f76cd58193f854c6e6213cd05fd58d637865d02065ff558b387fa6ea",
+        "id": "0x486435a1f76cd58193f854c6e6213cd05fd58d637865d02065ff558b387fa6ea"
     },
     "ETH/USDG": {
-        "id": "0xbac3aa3b91584a53a579b3c999a56756e954e59247e497bad1d25a4334bde551",
+        "id": "0xbac3aa3b91584a53a579b3c999a56756e954e59247e497bad1d25a4334bde551"
     }
 }
 
@@ -21,7 +22,11 @@ POOLS = {
 def send(text):
     requests.post(
         f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-        json={"chat_id": CHAT_ID, "text": text}
+        json={
+            "chat_id": CHAT_ID,
+            "text": text
+        },
+        timeout=20
     )
 
 
@@ -39,14 +44,14 @@ def save_state(state):
 
 def get_json(url):
     r = requests.get(url, timeout=20)
-    r.raise_for_status()
+
+    if r.status_code != 200:
+        print("URL:", url)
+        print("STATUS:", r.status_code)
+        print("BODY:", r.text)
+        return None
+
     return r.json()
-
-
-def get_mark(pool):
-    return get_json(
-        f"https://www.fables.fi/api/indexer?op=marks&ids={pool}"
-    )
 
 
 def get_hour(pool):
@@ -61,55 +66,69 @@ def get_day(pool):
     )
 
 
-state = load_state()
-report = []
+def sqrt_to_price(sqrt_x96):
+    """
+    Примерная цена из sqrtPriceX96
+    """
+    return (int(sqrt_x96) / 2**96) ** 2
 
-now = datetime.utcnow().strftime("%d.%m.%Y %H:%M UTC")
-report.append(f"📊 Fables LP Report\n{now}\n")
+
+state = load_state()
+
+lines = []
+
+lines.append("📊 Fables LP Report")
+lines.append(datetime.utcnow().strftime("%d.%m.%Y %H:%M UTC"))
+lines.append("")
 
 for name, info in POOLS.items():
 
     pool = info["id"]
 
-    mark = get_mark(pool)
     hour = get_hour(pool)
     day = get_day(pool)
 
-    price = float(mark["data"]["Pool"][0]["usd0"])
+    if hour is None:
+        lines.append(f"❌ {name}")
+        lines.append("Не удалось получить данные.")
+        lines.append("")
+        continue
 
-    prev = state.get(pool, price)
-    change = (price - prev) / prev * 100 if prev else 0
+    latest = hour["data"]["PoolHour"][-1]
 
-    state[pool] = price
+    high = latest["highSqrtPriceX96"]
+    low = latest["lowSqrtPriceX96"]
 
-    h = hour["data"]["PoolHour"][-1]
+    current_price = sqrt_to_price(high)
+    low_price = sqrt_to_price(low)
 
-    low = h["lowSqrtPriceX96"]
-    high = h["highSqrtPriceX96"]
+    old_price = state.get(pool, current_price)
 
-    fees0 = int(h["fees0"])
-    fees1 = int(h["fees1"])
+    change = 0
 
-    status = "🟢 In Range"
+    if old_price != 0:
+        change = (current_price - old_price) / old_price * 100
+
+    state[pool] = current_price
 
     arrow = "📈" if change >= 0 else "📉"
 
-    report.append(
-f"""{status}
+    fees0 = int(latest["fees0"])
+    fees1 = int(latest["fees1"])
 
-{name}
-Цена сейчас: {price:.8f}
-Изменение за час: {arrow} {change:+.2f}%
-
-Комиссии часа:
-• token0: {fees0}
-• token1: {fees1}
-
-Диапазон часа (sqrt):
-{low}
-→
-{high}
-""")
+    lines.append("🟢 In Range")
+    lines.append("")
+    lines.append(name)
+    lines.append(f"Цена сейчас: {current_price:.8f}")
+    lines.append(f"Диапазон часа:")
+    lines.append(f"{low_price:.8f} → {current_price:.8f}")
+    lines.append(f"Изменение: {arrow} {change:+.2f}%")
+    lines.append("")
+    lines.append("Комиссии часа:")
+    lines.append(f"• token0: {fees0:,}".replace(",", " "))
+    lines.append(f"• token1: {fees1:,}".replace(",", " "))
+    lines.append("")
 
 save_state(state)
-send("\n".join(report))
+
+send("\n".join(lines))
