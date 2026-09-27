@@ -6,16 +6,10 @@ from datetime import datetime, timezone
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-RPC = "https://rpc.mainnet.chain.robinhood.com"
-
 STATE_FILE = "last_state.json"
 
 PONS_POOL = "0x486435a1f76cd58193f854c6e6213cd05fd58d637865d02065ff558b387fa6ea"
 ETH_POOL = "0xbac3aa3b91584a53a579b3c999a56756e954e59247e497bad1d25a4334bde551"
-
-PONS_CALL = "0xf7b7da000000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000046b62df00000000000000000000000000000000000000000000000000000000018dcdfb000000000000000000000000000000000000000000000000000000006ab95dad0000000000000000000000000000000000000000000000000000000000000001000000000000000000000000503b3082e7e03b31fe2d223bb6c8a81b39868c600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000bb1c293b150450"
-
-ETH_CALL = "0xf7b7da000000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000046b62df00000000000000000000000000000000000000000000000000000000018dcdfb000000000000000000000000000000000000000000000000000000006ab95dad000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000020000000000000000000000000b9972ca7188e511174947e3936a5315ac70732770"
 
 
 def send(text):
@@ -36,36 +30,6 @@ def load_state():
 def save_state(state):
     with open(STATE_FILE, "w") as f:
         json.dump(state, f)
-
-
-def rpc_call(data):
-    payload = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "eth_call",
-        "params": [{
-            "to": "0xE44c0BAb43BdD47e7Ab40236bC183dCc77A9ED6c",
-            "data": data
-        }, "latest"]
-    }
-
-    r = requests.post(RPC, json=payload, timeout=30)
-    r.raise_for_status()
-
-    response = r.json()
-    if isinstance(response, list):
-        if not response:
-            raise ValueError("RPC вернул пустой batch-ответ")
-        response = response[0]
-
-    if "error" in response:
-        error = response["error"]
-        raise RuntimeError(f"RPC eth_call error {error.get('code')}: {error.get('message')}")
-
-    result = response.get("result")
-    if not isinstance(result, str) or not result.startswith("0x"):
-        raise ValueError(f"Некорректный результат RPC eth_call: {result!r}")
-    return result
 
 
 def sqrt_to_price(value):
@@ -91,7 +55,7 @@ def get_pool_hour(pool):
     return data[-1]
 
 
-def report(name, pool, call, state):
+def report(name, pool, state):
 
     hour = get_pool_hour(pool)
 
@@ -103,7 +67,9 @@ def report(name, pool, call, state):
         low = close
         high = close
 
-    current = sqrt_to_price(rpc_call(call)[130:194])
+    if "closeSqrtPriceX96" not in hour:
+        raise ValueError("API не вернул цену закрытия текущего часа (closeSqrtPriceX96)")
+    current = sqrt_to_price(hour["closeSqrtPriceX96"])
 
     prev = state.get(name, current)
     change = (current - prev) / prev * 100 if prev else 0
@@ -130,12 +96,12 @@ state = load_state()
 
 text = f"📊 Fables LP Report\n{datetime.utcnow().strftime('%d.%m.%Y %H:%M UTC')}\n\n"
 
-for name, pool, call in [
-    ("PONS/USDG", PONS_POOL, PONS_CALL),
-    ("ETH/USDG", ETH_POOL, ETH_CALL),
+for name, pool in [
+    ("PONS/USDG", PONS_POOL),
+    ("ETH/USDG", ETH_POOL),
 ]:
     try:
-        text += report(name, pool, call, state) + "\n\n"
+        text += report(name, pool, state) + "\n\n"
     except Exception as e:
         text += f"❌ {name}\n{e}\n\n"
 
