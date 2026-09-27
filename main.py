@@ -1,28 +1,28 @@
 import os
 import json
+import math
 import requests
-from datetime import datetime
+from datetime import datetime, timezone
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
+RPC = "https://rpc.mainnet.chain.robinhood.com"
+
 STATE_FILE = "last_state.json"
 
-POOLS = {
-    "PONS/USDG": {
-        "id": "0x486435a1f76cd58193f854c6e6213cd05fd58d637865d02065ff558b387fa6ea"
-    },
-    "ETH/USDG": {
-        "id": "0xbac3aa3b91584a53a579b3c999a56756e954e59247e497bad1d25a4334bde551"
-    }
-}
+PONS_POOL = "0x486435a1f76cd58193f854c6e6213cd05fd58d637865d02065ff558b387fa6ea"
+ETH_POOL = "0xbac3aa3b91584a53a579b3c999a56756e954e59247e497bad1d25a4334bde551"
+
+PONS_CALL = "0xf7b7da000000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000046b62df00000000000000000000000000000000000000000000000000000000018dcdfb000000000000000000000000000000000000000000000000000000006ab95dad0000000000000000000000000000000000000000000000000000000000000001000000000000000000000000503b3082e7e03b31fe2d223bb6c8a81b39868c600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000bb1c293b15045"
+
+ETH_CALL = "0xf7b7da000000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000046b62df00000000000000000000000000000000000000000000000000000000018dcdfb000000000000000000000000000000000000000000000000000000006ab95dad000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000020000000000000000000000000b9972ca7188e511174947e3936a5315ac7073277"
 
 
 def send(text):
     requests.post(
         f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-        json={"chat_id": CHAT_ID, "text": text},
-        timeout=20
+        json={"chat_id": CHAT_ID, "text": text}
     )
 
 
@@ -38,75 +38,74 @@ def save_state(state):
         json.dump(state, f)
 
 
-def get_json(url):
-    r = requests.get(url, timeout=20)
+def rpc_call(data):
+    payload = [{
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "eth_call",
+        "params": [{
+            "to": "0xE44c0BAb43BdD47e7Ab40236bC183dCc77A9ED6c",
+            "data": data
+        }, "latest"]
+    }]
+    r = requests.post(RPC, json=payload, timeout=30)
+    r.raise_for_status()
+    return r.json()[0]["result"]
 
-    if r.status_code != 200:
-        print(f"Ошибка {r.status_code}: {url}")
-        print(r.text)
-        return None
 
-    return r.json()
+def sqrt_to_price(x):
+    return (int(x,16)/(2**96))**2
 
 
-def sqrt_to_price(v):
-    return (int(v) / 2**96) ** 2
+def pool_hour(pool):
+    now = int(datetime.now(timezone.utc).timestamp())
+    now = now - now % 3600
+    url = f"https://www.fables.fi/api/indexer?op=hours&ids={pool}&since={now}&off=0"
+    r = requests.get(url, timeout=30)
+    r.raise_for_status()
+    return r.json()["data"]["PoolHour"][-1]
 
 
-state = load_state()
+def report(name,pool,call,state):
 
-msg = []
-msg.append("📊 Fables LP Report")
-msg.append(datetime.utcnow().strftime("%d.%m.%Y %H:%M UTC"))
-msg.append("")
+    p = pool_hour(pool)
 
-for name, info in POOLS.items():
+    low = sqrt_to_price(hex(int(p["lowSqrtPriceX96"])) )
+    high = sqrt_to_price(hex(int(p["highSqrtPriceX96"])) )
 
-    pool = info["id"]
+    current = sqrt_to_price(rpc_call(call)[130:194])
 
-    hour = get_json(
-        f"https://www.fables.fi/api/indexer?op=hours&ids={pool}"
-    )
+    prev = state.get(name,current)
+    change = (current-prev)/prev*100 if prev else 0
+    state[name]=current
 
-    if hour is None:
-        msg.append(f"❌ {name}")
-        msg.append("Не удалось получить данные.\n")
-        continue
+    return f"""🟢 {name}
 
-    data = hour["data"]["PoolHour"]
+Цена: {current:.8f}
+Изменение: {change:+.2f}%
 
-    latest = data[-1]
-    prev = data[-2] if len(data) > 1 else latest
+Диапазон:
+{low:.8f}
+⬇
+{high:.8f}
 
-    high = sqrt_to_price(latest["highSqrtPriceX96"])
-    low = sqrt_to_price(latest["lowSqrtPriceX96"])
+Комиссии часа:
+token0 {int(p["fees0"])/1e18:.6f}
+token1 {int(p["fees1"])/1e6:.6f}"""
 
-    prev_price = sqrt_to_price(prev["highSqrtPriceX96"])
 
-    change = 0
-    if prev_price:
-        change = (high - prev_price) / prev_price * 100
+state=load_state()
 
-    fees0 = int(latest["fees0"])
-    fees1 = int(latest["fees1"])
+text=f"📊 Fables LP Report\n{datetime.utcnow().strftime('%d.%m.%Y %H:%M UTC')}\n\n"
 
-    arrow = "📈" if change >= 0 else "📉"
-
-    msg.append("🟢 In Range")
-    msg.append("")
-    msg.append(name)
-    msg.append(f"Цена сейчас: {high:.8f}")
-    msg.append(f"Диапазон часа:")
-    msg.append(f"{low:.8f} → {high:.8f}")
-    msg.append(f"Изменение: {arrow} {change:+.2f}%")
-    msg.append("")
-    msg.append("Комиссии часа:")
-    msg.append(f"• token0: {fees0:,}".replace(',', ' '))
-    msg.append(f"• token1: {fees1:,}".replace(',', ' '))
-    msg.append("")
-
-    state[pool] = high
+for n,p,c in [
+    ("PONS/USDG",PONS_POOL,PONS_CALL),
+    ("ETH/USDG",ETH_POOL,ETH_CALL)
+]:
+    try:
+        text+=report(n,p,c,state)+"\n\n"
+    except Exception as e:
+        text+=f"❌ {n}\n{e}\n\n"
 
 save_state(state)
-
-send("\n".join(msg))
+send(text)
