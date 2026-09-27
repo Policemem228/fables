@@ -15,6 +15,11 @@ SWAP_TOPIC = "0x40e9cecb9f5f1f1c5b9c97dec2917b7ee92e57ba5563708daca94dd84ad7112f
 PONS_POOL = "0x486435a1f76cd58193f854c6e6213cd05fd58d637865d02065ff558b387fa6ea"
 ETH_POOL = "0xbac3aa3b91584a53a579b3c999a56756e954e59247e497bad1d25a4334bde551"
 
+LP_RANGES = {
+    "PONS/USDG": {"low": 0.4909, "high": 0.7338},
+    "ETH/USDG": {"low": 2401.90, "high": 2901.56},
+}
+
 
 def send(text):
     requests.post(
@@ -163,6 +168,18 @@ def report(name, pool, state, activity):
     change_text = f"{(current - prev) / prev * 100:+.2f}%" if prev else "нет предыдущих данных"
     state[name] = current
 
+    lp_range = LP_RANGES[name]
+    position_low = lp_range["low"]
+    position_high = lp_range["high"]
+    if current < position_low:
+        position_status = "ниже диапазона"
+    elif current > position_high:
+        position_status = "выше диапазона"
+    else:
+        position_status = "в диапазоне"
+    low_delta = (position_low / current - 1) * 100
+    high_delta = (position_high / current - 1) * 100
+
     fee0_text = f"{swaps.get('fees0', 0) / 1e18:.6f}"
     fee1_text = f"{swaps.get('fees1', 0) / 1e6:.6f}"
 
@@ -170,6 +187,11 @@ def report(name, pool, state, activity):
 
 💵 Цена: {current:.8f}
 📈 Изменение: {change_text}
+
+📍 Мой LP-диапазон
+⬇️ {position_low:.8f} USDG ({low_delta:+.2f}% от текущей цены)
+⬆️ {position_high:.8f} USDG ({high_delta:+.2f}% от текущей цены)
+Статус: {position_status}
 
 🎯 Диапазон часа
 ⬇ {low_text}
