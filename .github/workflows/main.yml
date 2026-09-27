@@ -1,4 +1,3 @@
-
 name: Fables LP Monitor
 
 on:
@@ -19,7 +18,8 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install requests
+        run: |
+          pip install requests web3 eth-abi
 
       - name: Run bot
         env:
